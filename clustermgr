@@ -1,0 +1,21 @@
+#!/usr/bin/python
+import sys
+import cephrobot
+
+
+if len(sys.argv) < 3:
+    print "pls designate the operation"
+    print "clustermgr <tmplate> rm"
+    print "the file should include the [rm cluster] section"
+    print "clustermgr <tmplate> launch"
+    sys.exit(1)
+
+tmplate = sys.argv[1]
+print "tmp file is %s"%tmplate
+arobot = cephrobot.CephRobot(tmplate)
+
+if sys.argv[2]=="launch":
+    arobot.launch_cluster()
+else:
+    if sys.argv[2]=="rm":
+        arobot.rm_cluster()

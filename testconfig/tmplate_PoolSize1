@@ -1,0 +1,28 @@
+[creation params]
+;ceph node = ruijie-node0
+mon host = ruijie-node0 ruijie-node1 ruijie-node2
+mds host = ruijie-node0 ruijie-node1 ruijie-node2
+zap disk = ruijie-node0:sdb ruijie-node0:sdc ruijie-node1:sdb ruijie-node1:sdc ruijie-node2:sdb ruijie-node2:sdc
+osd disk = ruijie-node0:sdb ruijie-node0:sdc ruijie-node1:sdb ruijie-node1:sdc ruijie-node2:sdb ruijie-node2:sdc
+
+[ceph cluster settings]
+osd journal size = 10240
+;osd mkfs type = xfs
+;auth supported = none
+auth_cluster_required = none
+auth_service_required = none
+auth_client_required = none
+public_network = 172.18.11.0/24
+cluster_network = 10.10.11.0/24
+osd pool default size = 1
+
+[cephfs settings]
+keep no change = True
+data pool name = rcd_data
+data pool replica size = 3 
+metadata pool name = rcd_metadata
+metadata pool replica size = 3 
+
+[rm cluster]
+host names = ruijie-node0 ruijie-node1 ruijie-node2
+

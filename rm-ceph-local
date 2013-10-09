@@ -1,0 +1,48 @@
+#!/bin/sh
+
+set -x
+
+#if [ ! "$1" = "--yes-i-really-mean-it" ]; then
+    #echo 'Please pass "--yes-i-really-mean-it" if you really mean it.'
+    #exit 1;
+#fi
+#shift
+
+if [ ! "`whoami`" = "root" ]; then
+    echo "Please run as root."
+    exit 1;
+fi
+
+service ceph stop
+
+CEPH_DATA_DIR=/var/lib/ceph
+
+devices=`find /dev/disk/by-partuuid -maxdepth 1 -mindepth 1 | xargs -n1 --no-run-if-empty readlink -f`
+devices=$devices" "`find /dev/disk/by-parttypeuuid -maxdepth 1 -mindepth 1 | xargs -n1 --no-run-if-empty readlink -f`
+devices=`echo $devices | xargs -n1 --no-run-if-empty | sort | uniq`
+
+for part in $devices; do
+    if [ ! "" = "`mount | grep $part`" ]; then
+        umount $part
+    fi
+    dev=`echo $part | sed "s/[0-9]\{1,\}//"`
+    num=`echo $part | sed "s/.*\([0-9]\{1,\}\)$/\1/"`
+    parted $dev --script -- rm $num
+done
+
+for osd in `find $CEPH_DATA_DIR/osd -maxdepth 1 -mindepth 1`; do
+    if [ ! "" = "`mount | grep $osd`" ]; then
+        umount $osd
+    fi
+done
+
+rm -rf $CEPH_DATA_DIR/mds/*
+rm -rf $CEPH_DATA_DIR/osd/*
+rm -rf $CEPH_DATA_DIR/mon/*
+rm -rf $CEPH_DATA_DIR/tmp/*
+rm -rf $CEPH_DATA_DIR/bootstrap-osd/*
+rm -rf $CEPH_DATA_DIR/bootstrap-mds/*
+rm -f /etc/ceph/*
+rm -f /dev/disk/by-partuuid/*
+rm -f /dev/disk/by-parttypeuuid/*
+

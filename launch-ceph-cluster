@@ -1,0 +1,211 @@
+#!/usr/bin/python
+
+import os
+import sys
+import subprocess
+import ConfigParser
+import shutil
+#import getpass
+import time
+#import signal
+
+if len(sys.argv) == 1:
+    print 'Please enter a template file.'
+    sys.exit(1)
+
+#if getpass.getuser() != "ceph":
+#    print "Please run with user ceph."
+#    sys.exit(1)
+
+config = ConfigParser.ConfigParser()
+config.readfp(open(sys.argv[1]))
+
+#cluster_dir = config.get('creation params', 'cluster directory')
+cluster = os.path.basename(sys.argv[1])
+cluster_dir = 'cluster_%s' % cluster
+if os.path.exists(cluster_dir):
+   print 'The cluster dir "%s" already exists.' % cluster_dir
+
+os.mkdir(cluster_dir)
+shutil.copy(sys.argv[1], cluster_dir)
+workspace_dir = os.path.abspath(os.curdir)
+os.chdir(cluster_dir)
+
+# launch cluster as defined
+mon_hosts = config.get('creation params', 'mon host')
+if len(mon_hosts.split(' ')) <= 0:
+    print "Please specify one or more monitors."
+
+command = 'ceph-deploy new %s' % mon_hosts
+rc = subprocess.call(command, shell=True)
+if rc != 0:
+    print 'Creating cluster failed.'
+    sys.exit(1)
+
+new_config = ConfigParser.ConfigParser()
+new_config.readfp(open('./ceph.conf'))
+try:
+    new_config.remove_option('global', 'auth supported')
+except:
+    #print 'No auth supported option'
+    pass
+
+all_cluster_settings = config.items('ceph cluster settings')
+for setting in all_cluster_settings:
+    try:
+        new_config.set('global', setting[0], setting[1])
+    except:
+        print "Setting ceph.conf failed."
+        sys.exit(1)
+
+with open('./ceph.conf', 'wb') as configfile:
+    new_config.write(configfile)
+
+command = 'ceph-deploy mon create %s' % mon_hosts
+rc = subprocess.call(command, shell=True)
+if rc != 0:
+    print 'Creating mons failed.'
+    sys.exit(1)
+
+time.sleep(20)
+first_mon_host = mon_hosts.split(' ')[0]
+command = 'ceph-deploy gatherkeys %s' % first_mon_host
+while True:
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        time.sleep(5)
+    else:
+        break
+
+zap_disks = config.get('creation params', 'zap disk')
+command = 'ceph-deploy disk zap %s' % zap_disks
+rc = subprocess.call(command, shell=True)
+if rc != 0:
+    print 'Zapping disks failed.'
+    sys.exit(1)
+
+osd_disks = config.get('creation params', 'osd disk')
+command = 'ceph-deploy osd create %s' % osd_disks
+rc = subprocess.call(command, shell=True)
+if rc != 0:
+    print 'Creating osds failed.'
+    sys.exit(1)
+
+# set CRUSH map for 1 node or 2 nodes cluster
+node_num = len({}.fromkeys(map(lambda x:x[0:x.index(':')], osd_disks.split(' '))).keys())
+if node_num <= 2:
+    command = 'ceph osd getcrushmap -o old_coded_map'
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Getting crush map failed.'
+        sys.exit(1)
+    command = 'crushtool -d old_coded_map -o old_decoded_map'
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Decoding crush map failed.'
+        sys.exit(1)
+    command = 'cat old_decoded_map | sed "s/type host/type osd/g" | tee new_decoded_map'
+    rc = subprocess.call(command, shell=True)
+    command = 'crushtool -c new_decoded_map -o new_coded_map'
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Coding crush map failed.'
+        sys.exit(1)
+    command = 'ceph osd setcrushmap -i new_coded_map'
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Setting crush map failed.'
+        sys.exit(1)
+
+command = 'ceph -s | grep health | awk \'{print $2}\''
+while True:
+    p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+    health_status, err = p.communicate()
+    if health_status.strip() != "HEALTH_OK":
+        time.sleep(5)
+    else:
+        break
+subprocess.call('ceph -s', shell=True)
+
+mds_hosts = config.get('creation params', 'mds host')
+command = 'ceph-deploy mds create %s' % mds_hosts
+rc = subprocess.call(command, shell=True)
+if rc != 0:
+    print 'Creating mds failed.'
+    sys.exit(1)
+
+# set cephfs data and metadata pools
+keep_no_change = False
+try:
+    keep_no_change = config.get('cephfs settings', 'keep no change')
+except:
+    pass
+
+if not keep_no_change:
+    osd_num = len(osd_disks.split(' '))
+    data_pool_name = config.get('cephfs settings', 'data pool name')
+    if data_pool_name == 'data':
+        print "Don't use the default name."
+        sys.exit(1)
+    data_pool_replica_size = int(config.get('cephfs settings', 'data pool replica size'))
+    if data_pool_replica_size <= 0:
+        print "Please specify a number bigger than 0."
+    try:
+        data_placement_group_number = int(config.get('cephfs settings', 'data placement group number'))
+    except:
+        #print 'No data placement group number option'
+        data_placement_group_number = (100 * osd_num)/data_pool_replica_size
+
+    metadata_pool_name = config.get('cephfs settings', 'metadata pool name')
+    if metadata_pool_name == 'metadata':
+        print "Don't use the default name."
+        sys.exit(1)
+    metadata_pool_replica_size = int(config.get('cephfs settings', 'metadata pool replica size'))
+    if metadata_pool_replica_size <= 0:
+        print "Please specify a number bigger than 0."
+    try:
+        metadata_placement_group_number = int(config.get('cephfs settings', 'metadata placement group number'))
+    except:
+        #print 'No metadata placement group number option'
+        metadata_placement_group_number = (100 * osd_num)/metadata_pool_replica_size
+
+    command = 'ceph osd pool create %s %s %s' % (data_pool_name, data_placement_group_number, data_placement_group_number)
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Creating data pool failed.'
+        sys.exit(1)
+    command = 'ceph osd pool set %s size %s' % (data_pool_name, data_pool_replica_size)
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Setting data replica size failed.'
+        sys.exit(1)
+    command = 'ceph osd pool create %s %s %s' % (metadata_pool_name, metadata_placement_group_number, metadata_placement_group_number)
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Creating metadata pool failed.'
+        sys.exit(1)
+    command = 'ceph osd pool set %s size %s' % (metadata_pool_name, metadata_pool_replica_size)
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Setting metadata replica size failed.'
+        sys.exit(1)
+    rc = subprocess.call('ceph osd pool set %s crush_ruleset 1' % metadata_pool_name, shell=True)
+    if rc != 0:
+        print 'Setting metadata rule set failed.'
+        sys.exit(1)
+
+    command = 'ceph osd dump | grep "^pool" | grep "%s" | awk \'{print $2}\'' % data_pool_name
+    p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+    data_pool_id, err = p.communicate()
+    command = 'ceph osd dump | grep "^pool" | grep "%s" | awk \'{print $2}\'' % metadata_pool_name
+    p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+    metadata_pool_id, err = p.communicate()
+    command = 'ceph mds newfs %s %s --yes-i-really-mean-it' % (int(metadata_pool_id), int(data_pool_id))
+    print command
+    rc = subprocess.call(command, shell=True)
+    if rc != 0:
+        print 'Renewing cephfs failed.'
+        sys.exit(1)
+
+subprocess.call('ceph -s', shell=True)
+

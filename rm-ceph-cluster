@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -x
+
+script_path=$(cd "$(dirname "$0")"; pwd)
+
+#if [ ! "$1" = "--yes-i-really-mean-it" ]; then
+    #echo 'Please pass "--yes-i-really-mean-it" if you really mean it.'
+    #exit 1;
+#fi
+#shift
+
+if [ "" = "$*" ]; then
+    echo "Please specify ceph nodes to remove."
+    exit 1
+fi
+
+pssh -i -H "$*" "sudo service ceph stop"
+pscp -H "$*" $script_path/rm-ceph-local ~
+#pssh -i -H "$*" "sudo ~/rm-ceph-local --yes-i-really-mean-it"
+pssh -i -H "$*" "sudo ~/rm-ceph-local" 
+pssh -i -H "$*" "rm ~/rm-ceph-local"
+
